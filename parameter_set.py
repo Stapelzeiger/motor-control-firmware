@@ -8,32 +8,7 @@ import sys
 import yaml
 from watchdog.observers import Observer
 from watchdog.events import PatternMatchingEventHandler
-# from datadiff import diff
 import msgpack
-from serial_datagram import *
-import serial
-
-param_file_contents = {}
-param_file_namespace = {}
-conn_fd = None
-
-def get_file_params(f):
-    if os.path.exists(f):
-        try:
-            p = yaml.load(open(f, 'r'))
-            return p
-        except:
-            return {}
-    else:
-        return {}
-
-def parameter_update(p):
-    global conn_fd
-    packer = msgpack.Packer(encoding='ascii', use_single_float=True)
-    packet = SerialDatagram.encode(packer.pack(p))
-    conn_fd.write(packet)
-    print("update {} bytes: {}".format(len(packet), p))
-    print(packer.pack(p))
 
 
 """
@@ -64,7 +39,29 @@ def diffDict(original, modified):
         raise Exception('parameters must be a dictionary')
 
 
+
+def get_file_params(f):
+    if os.path.exists(f):
+        try:
+            p = yaml.load(open(f, 'r'))
+            return p
+        except:
+            return {}
+    else:
+        return {}
+
+
 class FileChangeHandler(PatternMatchingEventHandler):
+    def __init__(self, watch_dir, files, conn_fd):
+        PatternMatchingEventHandler.__init__(self, files)
+        self.conn_fd = conn_fd
+        self.param_file_contents = {}
+        self.param_file_namespace = {}
+        for f in files:
+            self.param_file_namespace[f] = os.path.splitext(os.path.relpath(f, watch_dir))[0]
+            self.param_file_contents[f] = get_file_params(f)
+            self.parameter_update(f)
+
     def on_any_event(self, event):
         if event.event_type in ('modified', 'created') and not event.is_directory:
             print("---- event handler ----")
@@ -74,50 +71,58 @@ class FileChangeHandler(PatternMatchingEventHandler):
             if new_params == {}:
                 return
             # print(new_params)
-            param_diff = diffDict(param_file_contents[event.src_path], new_params)
+            param_diff = diffDict(self.param_file_contents[event.src_path], new_params)
             if param_diff != {}:
-                parameter_update({param_file_namespace[event.src_path]: param_diff})
+                self.parameter_update({self.param_file_namespace[event.src_path]: param_diff})
             # update parameter copy:
-            param_file_contents[event.src_path] = new_params
+            self.param_file_contents[event.src_path] = new_params
+
+    def parameter_update(self, p):
+        packer = msgpack.Packer(encoding='ascii', use_single_float=True)
+        packet = SerialDatagram.encode(packer.pack(p))
+        self.conn_fd.write(packet)
+        print("update {} bytes: {}".format(len(packet), p))
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("dir", help="parameter root directory to be watched")
     parser.add_argument("files", nargs='+', help="json parameter files to be watched")
-    parser.add_argument("--dev", dest="dev", help="serial port device")
+    parser.add_argument("--uart", dest="uart", help="serial port device")
     parser.add_argument("--baud", dest="baudrate", default=921600, help="serial port baudrate")
+    parser.add_argument("--tcp", dest="tcp", help="TCP/IP connection host:port")
     args = parser.parse_args()
 
-    global conn_fd
-    print("opening serial port {} with baud rate {}".format(args.dev, args.baudrate))
-    conn_fd = serial.Serial(args.dev, args.baudrate)
-
+    if args.uart != None:
+        print("opening serial port {} with baud rate {}".format(args.uart, args.baudrate))
+        conn_fd = serial.Serial(args.uart, args.baudrate)
+        from serial_datagram import *
+        import serial
+    elif args.tcp != None:
+        print("using tcp:", args.tcp)
+        exit(-1); # todo
+    else:
+        print("please choose a connection protocol")
+        exit(-1)
 
     files = [os.path.abspath(f) for f in args.files]
     watch_dir = os.path.abspath(args.dir)
-    # watch_dir = os.path.dirname(os.path.commonprefix(files))
+
     print("watching parameter files: {} in {}".format(
         [os.path.basename(f) for f in files], watch_dir))
 
-    for f in files:
-        param_file_namespace[f] = os.path.splitext(os.path.relpath(f, watch_dir))[0]
-        param_file_contents[f] = get_file_params(f)
 
-    for f in files:
-        parameter_update({param_file_namespace[f]: param_file_contents[f]})
     # pprint(param_file_contents)
 
-    event_handler = FileChangeHandler(files)
+    event_handler = FileChangeHandler(watch_dir, files, conn_fd)
     observer = Observer()
     observer.schedule(event_handler, watch_dir, recursive=True)
     observer.start()
 
     try:
         while True:
-            # print(conn_fd.read())
-            sys.stdout.write(conn_fd.read().decode('ascii', 'ignore'))
-            # time.sleep(1)
+            # sys.stdout.write(conn_fd.read().decode('ascii', 'ignore'))
+            time.sleep(1)
     except KeyboardInterrupt:
         observer.stop()
     observer.join()
