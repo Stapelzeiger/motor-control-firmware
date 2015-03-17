@@ -52,6 +52,7 @@ def get_file_params(f):
 
 
 def parameter_update_serial(conn_fd, dtgm):
+    import serial_datagram
     packer = msgpack.Packer(encoding='ascii', use_single_float=True)
     packet = serial_datagram.encode(packer.pack(dtgm))
     conn_fd.write(packet)
@@ -96,7 +97,6 @@ def main():
 
     if args.uart != None:
         print("opening serial port {} with baud rate {}".format(args.uart, args.baudrate))
-        import serial_datagram
         import serial
         conn_fd = serial.Serial(args.uart, args.baudrate)
         sendfn = lambda dtgm : parameter_update_serial(conn_fd, dtgm)
