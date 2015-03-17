@@ -51,16 +51,23 @@ def get_file_params(f):
         return {}
 
 
+def parameter_update_serial(conn_fd, dtgm):
+    packer = msgpack.Packer(encoding='ascii', use_single_float=True)
+    packet = serial_datagram.encode(packer.pack(dtgm))
+    conn_fd.write(packet)
+    print("update {} bytes: {}".format(len(packet), dtgm))
+
+
 class FileChangeHandler(PatternMatchingEventHandler):
-    def __init__(self, watch_dir, files, conn_fd):
+    def __init__(self, watch_dir, files, sendfn):
         PatternMatchingEventHandler.__init__(self, files)
-        self.conn_fd = conn_fd
+        self.sendfn = sendfn
         self.param_file_contents = {}
         self.param_file_namespace = {}
         for f in files:
             self.param_file_namespace[f] = os.path.splitext(os.path.relpath(f, watch_dir))[0]
             self.param_file_contents[f] = get_file_params(f)
-            self.parameter_update(f)
+            self.sendfn({self.param_file_namespace[f]: self.param_file_contents[f]})
 
     def on_any_event(self, event):
         if event.event_type in ('modified', 'created') and not event.is_directory:
@@ -73,15 +80,9 @@ class FileChangeHandler(PatternMatchingEventHandler):
             # print(new_params)
             param_diff = diffDict(self.param_file_contents[event.src_path], new_params)
             if param_diff != {}:
-                self.parameter_update({self.param_file_namespace[event.src_path]: param_diff})
+                self.sendfn({self.param_file_namespace[event.src_path]: param_diff})
             # update parameter copy:
             self.param_file_contents[event.src_path] = new_params
-
-    def parameter_update(self, p):
-        packer = msgpack.Packer(encoding='ascii', use_single_float=True)
-        packet = SerialDatagram.encode(packer.pack(p))
-        self.conn_fd.write(packet)
-        print("update {} bytes: {}".format(len(packet), p))
 
 
 def main():
@@ -90,38 +91,36 @@ def main():
     parser.add_argument("files", nargs='+', help="json parameter files to be watched")
     parser.add_argument("--uart", dest="uart", help="serial port device")
     parser.add_argument("--baud", dest="baudrate", default=921600, help="serial port baudrate")
-    parser.add_argument("--tcp", dest="tcp", help="TCP/IP connection host:port")
+    parser.add_argument("--tcp", dest="tcp", help="TCP/IP connection using cvra_rpc host:port")
     args = parser.parse_args()
 
     if args.uart != None:
         print("opening serial port {} with baud rate {}".format(args.uart, args.baudrate))
-        conn_fd = serial.Serial(args.uart, args.baudrate)
-        from serial_datagram import *
+        import serial_datagram
         import serial
+        conn_fd = serial.Serial(args.uart, args.baudrate)
+        sendfn = lambda dtgm : parameter_update_serial(conn_fd, dtgm)
     elif args.tcp != None:
-        print("using tcp:", args.tcp)
-        exit(-1); # todo
+        import cvra_rpc.service_call
+        addr = str.split(args.tcp, ':')
+        print("using tcp:", addr)
+        sendfn = lambda dtgm : cvra_rpc.service_call.call(addr, 'parameter_set', [dtgm])
     else:
         print("please choose a connection protocol")
         exit(-1)
 
     files = [os.path.abspath(f) for f in args.files]
     watch_dir = os.path.abspath(args.dir)
-
     print("watching parameter files: {} in {}".format(
         [os.path.basename(f) for f in files], watch_dir))
 
-
-    # pprint(param_file_contents)
-
-    event_handler = FileChangeHandler(watch_dir, files, conn_fd)
+    event_handler = FileChangeHandler(watch_dir, files, sendfn)
     observer = Observer()
     observer.schedule(event_handler, watch_dir, recursive=True)
     observer.start()
 
     try:
         while True:
-            # sys.stdout.write(conn_fd.read().decode('ascii', 'ignore'))
             time.sleep(1)
     except KeyboardInterrupt:
         observer.stop()
