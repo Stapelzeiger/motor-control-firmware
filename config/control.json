@@ -1,22 +1,23 @@
 {
     "low_batt_th": 14,
     "loop_freq": 1000, # Hz
-    "acc_limit": 0.1,
+    "acc_limit": 10,
+    "velocity_limit": 1,
     "position": {
         "kp": 1,
         "ki": 0,
         "kd": 0,
     },
     "velocity": {
-        "kp": 0.2,
-        "ki": 0.2,
+        "kp": 0.4,
+        "ki": 0.1,
         "kd": 0,
-        "i_limit": 30
+        "i_limit": 10
     },
     "current": {
         "kp": 20,
         "ki": 20,
         "kd": 0,
-        "i_limit": 100
+        "i_limit": 10
     }
 }
